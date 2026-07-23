@@ -19,7 +19,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v7
     
     - name: Setup Node.js
       uses: actions/setup-node@v3
@@ -143,7 +143,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v7
     
     - name: Setup Python
       uses: actions/setup-python@v4
@@ -194,7 +194,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v7
     
     - name: Create required directories
       run: |
@@ -290,7 +290,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v7
     
     - name: Setup Node.js
       uses: actions/setup-node@v3
@@ -466,7 +466,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v7
     
     - name: Build Docker image
       run: |
