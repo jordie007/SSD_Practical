@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Welcome - Secure Web Application</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 400px; margin: 50px auto; padding: 20px; }
+        .container { border: 1px solid #ddd; padding: 20px; border-radius: 5px; text-align: center; }
+        .success { color: #28a745; font-size: 24px; }
+        .info { background: #f8f9fa; padding: 15px; margin: 20px 0; border-radius: 3px; word-break: break-all; }
+        button { padding: 10px 20px; background: #dc3545; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #c82333; }
+        .label { font-weight: bold; color: #495057; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2 class="success">✓ Welcome!</h2>
+        <p>Your account has been successfully created.</p>
+        <div class="info">
+            <div><span class="label">Username:</span> {{ username }}</div>
+            <div><span class="label">Password:</span> {{ password }}</div>
+        </div>
+        <form method="GET" action="/logout">
+            <button type="submit">Logout</button>
+        </form>
+    </div>
+</body>
+</html>

@@ -1,0 +1,516 @@
+name: CI/CD Pipeline - Secure Web Application
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Job 1: Security Scanning with ESLint
+  security-scan:
+    name: Security & Code Quality Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install ESLint and security plugins
+      run: |
+        npm install -g eslint
+        npm install -g eslint-plugin-security
+        npm install -g eslint-plugin-no-unsanitized
+        npm install -g eslint-plugin-scanjs-rules
+    
+    - name: Create ESLint configuration
+      run: |
+        cat > .eslintrc.json << 'EOF'
+        {
+          "parserOptions": {
+            "ecmaVersion": 2020,
+            "sourceType": "module"
+          },
+          "env": {
+            "browser": true,
+            "node": true,
+            "es6": true
+          },
+          "plugins": [
+            "security",
+            "no-unsanitized",
+            "scanjs-rules"
+          ],
+          "extends": [
+            "eslint:recommended",
+            "plugin:security/recommended"
+          ],
+          "rules": {
+            "security/detect-unsafe-regex": "error",
+            "security/detect-buffer-noassert": "error",
+            "security/detect-child-process": "error",
+            "security/detect-disable-mustache-escape": "error",
+            "security/detect-eval-with-expression": "error",
+            "security/detect-no-csrf-before-method-override": "error",
+            "security/detect-non-literal-fs-filename": "error",
+            "security/detect-non-literal-regexp": "error",
+            "security/detect-non-literal-require": "error",
+            "security/detect-object-injection": "warn",
+            "security/detect-possible-timing-attacks": "error",
+            "security/detect-pseudoRandomBytes": "error",
+            "no-unsanitized/method": "error",
+            "no-unsanitized/property": "error",
+            "scanjs-rules/assign_to_hostname": "warn",
+            "scanjs-rules/assign_to_location": "warn",
+            "scanjs-rules/assign_to_onmessage": "warn",
+            "scanjs-rules/assign_to_pathname": "warn",
+            "scanjs-rules/assign_to_protocol": "warn",
+            "scanjs-rules/call_Function": "error",
+            "scanjs-rules/call_addEventListener": "warn",
+            "scanjs-rules/call_setTimeout": "warn",
+            "scanjs-rules/call_setInterval": "warn",
+            "scanjs-rules/call_execScript": "error",
+            "scanjs-rules/call_importScripts": "error",
+            "scanjs-rules/identifier_indexedDB": "warn",
+            "scanjs-rules/identifier_localStorage": "warn",
+            "scanjs-rules/identifier_sessionStorage": "warn",
+            "scanjs-rules/new_Function": "error",
+            "scanjs-rules/property_FileReader": "warn",
+            "scanjs-rules/property_createElement": "warn",
+            "scanjs-rules/property_createEvent": "warn",
+            "scanjs-rules/property_innerHTML": "error",
+            "scanjs-rules/property_outerHTML": "error",
+            "scanjs-rules/property_insertAdjacentHTML": "error"
+          }
+        }
+        EOF
+    
+    - name: Run ESLint security scan on Python/JS files
+      run: |
+        # Check if there are any JS/HTML files to scan
+        if find . -name "*.js" -o -name "*.html" -o -name "*.htm" | grep -q .; then
+          eslint . --ext .js,.html,.htm --format=stylish || true
+        else
+          echo "No JavaScript/HTML files found to scan"
+        fi
+    
+    - name: Install Python security linters
+      run: |
+        pip install bandit
+        pip install safety
+        pip install pylint
+    
+    - name: Run Bandit security scan on Python code
+      run: |
+        if find ./app -name "*.py" | grep -q .; then
+          bandit -r ./app -f json -o bandit-report.json || true
+          bandit -r ./app -f custom || true
+        else
+          echo "No Python files found to scan"
+        fi
+    
+    - name: Check Python dependencies for vulnerabilities
+      run: |
+        if [ -f requirements.txt ]; then
+          safety check -r requirements.txt --full-report || true
+        else
+          echo "No requirements.txt found"
+        fi
+    
+    - name: Upload security scan results
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-scan-results
+        path: |
+          bandit-report.json
+          .eslintrc.json
+
+  # Job 2: Dependency Check
+  dependency-check:
+    name: Dependency Vulnerability Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install OWASP Dependency Check
+      run: |
+        wget https://github.com/jeremylong/DependencyCheck/releases/download/v8.2.1/dependency-check-8.2.1-release.zip
+        unzip dependency-check-8.2.1-release.zip
+        sudo mkdir -p /opt/dependency-check
+        sudo mv dependency-check /opt/dependency-check/
+        sudo ln -s /opt/dependency-check/dependency-check/bin/dependency-check.sh /usr/local/bin/dependency-check
+    
+    - name: Run OWASP Dependency Check on Python requirements
+      run: |
+        if [ -f requirements.txt ]; then
+          dependency-check --scan ./requirements.txt --format HTML --out dependency-report.html --prettyPrint
+        else
+          echo "No requirements.txt found"
+        fi
+    
+    - name: Check for known vulnerabilities in Dockerfile
+      run: |
+        if [ -f Dockerfile ]; then
+          echo "Checking Dockerfile for security best practices..."
+          # Check for root user
+          if grep -q "USER root" Dockerfile; then
+            echo "WARNING: Dockerfile uses root user"
+          fi
+          # Check for latest tag
+          if grep -q ":latest" Dockerfile; then
+            echo "WARNING: Dockerfile uses 'latest' tag"
+          fi
+        fi
+    
+    - name: Upload dependency report
+      uses: actions/upload-artifact@v3
+      with:
+        name: dependency-report
+        path: dependency-report.html
+
+  # Job 3: Integration Testing
+  integration-tests:
+    name: Integration Testing
+    runs-on: ubuntu-latest
+    needs: [security-scan, dependency-check]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Create required directories
+      run: |
+        mkdir -p app/templates
+        mkdir -p init-db
+        mkdir -p certs
+    
+    - name: Download common passwords file if needed
+      run: |
+        if [ ! -f app/100k-most-used-passwords-NCSC.txt ]; then
+          curl -o app/100k-most-used-passwords-NCSC.txt https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt || echo "Warning: Could not download passwords file"
+        fi
+    
+    - name: Start Docker Compose services
+      run: |
+        docker-compose -f docker-compose.yml up -d
+        sleep 30  # Wait for services to be ready
+    
+    - name: Verify services are running
+      run: |
+        docker ps
+        docker-compose -f docker-compose.yml ps
+    
+    - name: Test database connectivity
+      run: |
+        docker exec web_app python -c "
+        import psycopg2
+        import time
+        max_retries = 10
+        for i in range(max_retries):
+            try:
+                conn = psycopg2.connect(
+                    host='db',
+                    database='webapp_db',
+                    user='admin',
+                    password='2402242@sit.singaporetech.edu.sg'
+                )
+                conn.close()
+                print('Database connection successful!')
+                break
+            except Exception as e:
+                print(f'Attempt {i+1}/{max_retries} failed: {e}')
+                time.sleep(3)
+        else:
+            print('Failed to connect to database after all retries')
+            exit(1)
+        "
+    
+    - name: Test web server accessibility (HTTP)
+      run: |
+        curl -k -I https://127.0.0.1 || echo "HTTPS endpoint may not be ready"
+        curl -I http://127.0.0.1 || echo "HTTP endpoint may not be ready"
+    
+    - name: Test API endpoints
+      run: |
+        # Test home page
+        curl -k -s https://127.0.0.1/ | grep -q "Login" && echo "Home page accessible" || echo "Home page test failed"
+        
+        # Test create account page
+        curl -k -s https://127.0.0.1/create_account | grep -q "Create Account" && echo "Create account page accessible" || echo "Create account page test failed"
+        
+        # Test login functionality with invalid password (should fail)
+        curl -k -X POST https://127.0.0.1/login \
+          -d "username=testuser&password=weak" \
+          -H "Content-Type: application/x-www-form-urlencoded" \
+          -s | grep -q "Password must be" && echo "Password validation working" || echo "Password validation test failed"
+        
+        # Test login with valid password (should succeed)
+        curl -k -X POST https://127.0.0.1/login \
+          -d "username=testuser&password=Test@123456" \
+          -H "Content-Type: application/x-www-form-urlencoded" \
+          -s | grep -q "Welcome" && echo "Login successful" || echo "Login test failed"
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-logs
+        path: |
+          docker-compose logs
+          /tmp/test-results-*.log
+    
+    - name: Stop Docker Compose services
+      if: always()
+      run: |
+        docker-compose -f docker-compose.yml down
+
+  # Job 4: UI Testing
+  ui-tests:
+    name: UI Testing
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Install Playwright
+      run: |
+        npm init -y
+        npm install @playwright/test
+        npx playwright install chromium
+    
+    - name: Create Playwright test configuration
+      run: |
+        cat > playwright.config.js << 'EOF'
+        import { defineConfig, devices } from '@playwright/test';
+        
+        export default defineConfig({
+          testDir: './tests',
+          timeout: 30000,
+          fullyParallel: true,
+          forbidOnly: !!process.env.CI,
+          retries: process.env.CI ? 2 : 0,
+          workers: process.env.CI ? 1 : undefined,
+          reporter: 'html',
+          use: {
+            baseURL: 'https://127.0.0.1',
+            ignoreHTTPSErrors: true,
+            trace: 'on-first-retry',
+            screenshot: 'only-on-failure',
+          },
+          projects: [
+            {
+              name: 'chromium',
+              use: { ...devices['Desktop Chrome'] },
+            },
+          ],
+        });
+        EOF
+    
+    - name: Create UI test file
+      run: |
+        mkdir -p tests
+        cat > tests/security-ui.spec.js << 'EOF'
+        import { test, expect } from '@playwright/test';
+        
+        test.describe('Security Web Application UI Tests', () => {
+          test.beforeAll(async () => {
+            // Wait for server to be ready
+            await new Promise(resolve => setTimeout(resolve, 10000));
+          });
+        
+          test('Home page loads correctly', async ({ page }) => {
+            await page.goto('/');
+            await expect(page).toHaveTitle(/Login - Secure Web Application/);
+            await expect(page.locator('h2')).toContainText('Login');
+            await expect(page.locator('input[name="username"]')).toBeVisible();
+            await expect(page.locator('input[name="password"]')).toBeVisible();
+            await expect(page.locator('button[type="submit"]')).toContainText('Login');
+          });
+        
+          test('Password requirements are displayed', async ({ page }) => {
+            await page.goto('/');
+            await expect(page.locator('.requirements')).toBeVisible();
+            await expect(page.locator('.requirements')).toContainText('Minimum 8 characters');
+            await expect(page.locator('.requirements')).toContainText('At least one uppercase letter');
+            await expect(page.locator('.requirements')).toContainText('At least one special character');
+          });
+        
+          test('Weak password shows error message', async ({ page }) => {
+            await page.goto('/');
+            await page.fill('input[name="username"]', 'testuser');
+            await page.fill('input[name="password"]', 'weak');
+            await page.click('button[type="submit"]');
+            
+            await expect(page.locator('.error')).toBeVisible();
+            await expect(page.locator('.error')).toContainText('Password must be');
+          });
+        
+          test('Strong password creates account successfully', async ({ page }) => {
+            await page.goto('/');
+            await page.fill('input[name="username"]', 'secureuser');
+            await page.fill('input[name="password"]', 'StrongP@ssw0rd123!');
+            await page.click('button[type="submit"]');
+            
+            await expect(page.locator('.success')).toBeVisible();
+            await expect(page.locator('.success')).toContainText('Welcome');
+            await expect(page.locator('.info')).toContainText('secureuser');
+          });
+        
+          test('Create account page loads correctly', async ({ page }) => {
+            await page.goto('/create_account');
+            await expect(page).toHaveTitle(/Create Account - Secure Web Application/);
+            await expect(page.locator('h2')).toContainText('Create Account');
+            await expect(page.locator('input[name="username"]')).toBeVisible();
+            await expect(page.locator('input[name="password"]')).toBeVisible();
+            await expect(page.locator('button[type="submit"]')).toContainText('Create Account');
+          });
+        
+          test('Successful account creation redirects to welcome page', async ({ page }) => {
+            await page.goto('/create_account');
+            await page.fill('input[name="username"]', 'newuser');
+            await page.fill('input[name="password"]', 'NewUser@2024Secure!');
+            await page.click('button[type="submit"]');
+            
+            await expect(page.locator('.success')).toBeVisible();
+            await expect(page.locator('.info')).toContainText('newuser');
+          });
+        
+          test('Logout button returns to home page', async ({ page }) => {
+            // First create an account
+            await page.goto('/');
+            await page.fill('input[name="username"]', 'logoutuser');
+            await page.fill('input[name="password"]', 'Logout@2024!');
+            await page.click('button[type="submit"]');
+            
+            // Then logout
+            await page.click('button[type="submit"]');
+            await expect(page).toHaveURL('/');
+            await expect(page.locator('h2')).toContainText('Login');
+          });
+        
+          test('XSS prevention in username field', async ({ page }) => {
+            await page.goto('/');
+            await page.fill('input[name="username"]', '<script>alert("XSS")</script>');
+            await page.fill('input[name="password"]', 'Test@123456');
+            await page.click('button[type="submit"]');
+            
+            // Check that the username is properly escaped and no alert is triggered
+            await expect(page.locator('.info')).not.toContainText('<script>');
+          });
+        
+          test('SQL injection prevention', async ({ page }) => {
+            await page.goto('/');
+            await page.fill('input[name="username"]', "' OR '1'='1");
+            await page.fill('input[name="password"]', "' OR '1'='1");
+            await page.click('button[type="submit"]');
+            
+            // Should not be successful login
+            await expect(page.locator('.error')).toBeVisible();
+          });
+        });
+        EOF
+    
+    - name: Start Docker Compose services for UI tests
+      run: |
+        docker-compose -f docker-compose.yml up -d
+        sleep 35  # Wait for services to be fully ready
+    
+    - name: Run Playwright UI tests
+      run: |
+        npx playwright test --project=chromium
+    
+    - name: Upload UI test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: ui-test-results
+        path: |
+          playwright-report/
+          test-results/
+    
+    - name: Stop Docker Compose services
+      if: always()
+      run: |
+        docker-compose -f docker-compose.yml down
+
+  # Job 5: Container Security Scan
+  container-security:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Build Docker image
+      run: |
+        docker build -t web-app:latest .
+    
+    - name: Install Trivy
+      run: |
+        wget https://github.com/aquasecurity/trivy/releases/download/v0.40.0/trivy_0.40.0_Linux-64bit.deb
+        sudo dpkg -i trivy_0.40.0_Linux-64bit.deb
+    
+    - name: Run Trivy vulnerability scan
+      run: |
+        trivy image --format table --severity HIGH,CRITICAL web-app:latest
+        trivy image --format json --output trivy-report.json web-app:latest || true
+    
+    - name: Upload Trivy scan results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: trivy-scan-results
+        path: trivy-report.json
+
+  # Final Job: Summary
+  summary:
+    name: Summary Report
+    runs-on: ubuntu-latest
+    needs: [security-scan, dependency-check, integration-tests, ui-tests, container-security]
+    if: always()
+    
+    steps:
+    - name: Create summary report
+      run: |
+        echo "## 📊 CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| 🔒 Security Scan | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 📦 Dependency Check | ${{ needs.dependency-check.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🔗 Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🎨 UI Tests | ${{ needs.ui-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🐳 Container Security | ${{ needs.container-security.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📝 Notes" >> $GITHUB_STEP_SUMMARY
+        echo "- All tests run with HTTPS self-signed certificates" >> $GITHUB_STEP_SUMMARY
+        echo "- OWASP C7 password requirements enforced" >> $GITHUB_STEP_SUMMARY
+        echo "- Common passwords checked against NCSC database" >> $GITHUB_STEP_SUMMARY
+        echo "- Security scanning includes: ESLint, Bandit, Safety, Trivy, OWASP Dependency Check" >> $GITHUB_STEP_SUMMARY

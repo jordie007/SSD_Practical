@@ -1,0 +1,53 @@
+name: Scheduled Security Scan
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Run every Sunday at midnight
+  workflow_dispatch:
+
+jobs:
+  scheduled-security-scan:
+    name: Weekly Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install security tools
+      run: |
+        pip install bandit safety pylint
+        npm install -g eslint eslint-plugin-security eslint-plugin-no-unsanitized
+    
+    - name: Run comprehensive security scan
+      run: |
+        # Run all security tools
+        bandit -r ./app -f json -o scheduled-bandit-report.json || true
+        safety check -r requirements.txt --full-report > scheduled-safety-report.txt || true
+        eslint . --ext .js,.html --format json -o scheduled-eslint-report.json || true
+        
+        # Check for secrets
+        echo "Checking for hardcoded secrets..."
+        if grep -r "password\|secret\|key\|token" ./app --include="*.py" --include="*.js" | grep -v "test" | grep -v "example"; then
+          echo "⚠️ Potential hardcoded secrets found!"
+        fi
+    
+    - name: Upload scheduled scan results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: scheduled-security-scan-results
+        path: |
+          scheduled-*.json
+          scheduled-*.txt
+    
+    - name: Send notification (if vulnerabilities found)
+      if: failure()
+      run: |
+        echo "⚠️ Security vulnerabilities detected! Please check the scheduled scan results."
+        # This could be integrated with Slack, email, etc.

@@ -1,0 +1,7 @@
+*.pyc
+__pycache__/
+db-data/
+certs/
+git-data/
+.env
+*.log
